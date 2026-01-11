@@ -2,11 +2,22 @@
 
 A modern, production-ready decentralized application (DApp) with support for MetaMask and other Web3 wallets. Built with React, Vite, Ethers.js, and Tailwind CSS.
 
+## 🚀 Live Demo
+
+**🌐 Live Application:** [https://guptariya.github.io/dapp/](https://guptariya.github.io/dapp/)
+
+> **Note:** Make sure you have MetaMask installed to interact with the DApp. The app works best on testnets like Sepolia for testing purposes.
+
 ## Features
 
 - 🔐 **Multi-Wallet Support**: Connect with MetaMask, WalletConnect, and other Web3 wallets
 - 💰 **Transaction Management**: Send ETH transactions and sign messages
+- 🔄 **DEX Integration**: Token swapping with Uniswap V3 integration
+- 📊 **Portfolio Tracker**: View all ERC-20 token balances and native tokens
+- ⛽ **Gas Price Tracker**: Real-time gas price monitoring with EIP-1559 support
+- 🛡️ **Token Approvals Manager**: Check and revoke ERC-20 token approvals
 - 🌐 **Multi-Chain Support**: Works with Ethereum, Polygon, Base, and other EVM-compatible chains
+- 📝 **Smart Contract Interaction**: Read and write to any ERC-20 contract
 - 🎨 **Modern UI**: Beautiful, responsive interface with Tailwind CSS
 - ⚡ **Fast Development**: Built with Vite for lightning-fast hot module replacement
 - 🔒 **Secure**: Follows Web3 security best practices

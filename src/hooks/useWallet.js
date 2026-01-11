@@ -75,16 +75,25 @@ export const useWallet = () => {
   const handleAccountsChanged = useCallback(async (accounts) => {
     try {
       if (accounts.length === 0) {
-        // User disconnected account in MetaMask
-        disconnect()
-        toast.info('Account disconnected')
+        // User disconnected account in MetaMask - fully disconnect
+        setIsManuallyDisconnected(true)
+        setAccount(null)
+        setChainId(null)
+        setBalance(null)
+        setProvider(null)
+        setSigner(null)
+        setError(null)
+        accountRef.current = null
+        providerRef.current = null
+        toast.info('Account disconnected from MetaMask')
       } else {
         const newAccount = accounts[0]
         
         // Check if account actually changed
         if (newAccount.toLowerCase() !== accountRef.current?.toLowerCase()) {
-          // Update account
+          // Update account immediately
           setAccount(newAccount)
+          accountRef.current = newAccount
           
           // Update provider and signer
           if (window.ethereum) {
@@ -95,8 +104,19 @@ export const useWallet = () => {
             setSigner(newSigner)
             
             // Update balance and chain ID
-            await updateChainId()
-            await updateBalance(newAccount)
+            try {
+              const chainId = await window.ethereum.request({ method: 'eth_chainId' })
+              setChainId(parseInt(chainId, 16))
+            } catch (err) {
+              console.error('Error updating chain ID:', err)
+            }
+            
+            try {
+              const balance = await newProvider.getBalance(newAccount)
+              setBalance(ethers.formatEther(balance))
+            } catch (err) {
+              console.error('Error updating balance:', err)
+            }
             
             // Notify user
             toast.success(`Switched to account: ${newAccount.slice(0, 6)}...${newAccount.slice(-4)}`)
@@ -107,7 +127,7 @@ export const useWallet = () => {
       console.error('Error handling account change:', error)
       toast.error('Failed to update account')
     }
-  }, [disconnect, updateChainId, updateBalance])
+  }, [])
 
   // Handle chain changes from MetaMask
   const handleChainChanged = useCallback((chainIdHex) => {
@@ -123,40 +143,22 @@ export const useWallet = () => {
       toast.info(`Switched to ${chainName}`)
       
       // Update balance for new chain
-      if (accountRef.current) {
-        updateBalance(accountRef.current)
+      if (accountRef.current && providerRef.current) {
+        providerRef.current.getBalance(accountRef.current)
+          .then(balance => {
+            setBalance(ethers.formatEther(balance))
+          })
+          .catch(err => {
+            console.error('Error updating balance:', err)
+          })
       }
     } catch (error) {
       console.error('Error handling chain change:', error)
     }
-  }, [updateBalance])
+  }, [])
 
-  // Initialize provider and set up event listeners
-  useEffect(() => {
-    if (typeof window.ethereum !== 'undefined') {
-      const provider = new ethers.BrowserProvider(window.ethereum)
-      setProvider(provider)
-      setIsMetaMask(true)
-
-      // Set up event listeners
-      window.ethereum.on('accountsChanged', handleAccountsChanged)
-      window.ethereum.on('chainChanged', handleChainChanged)
-
-      // Check if already connected (only if not manually disconnected)
-      if (!isManuallyDisconnected) {
-        checkConnection()
-      }
-    }
-
-    return () => {
-      if (window.ethereum) {
-        window.ethereum.removeListener('accountsChanged', handleAccountsChanged)
-        window.ethereum.removeListener('chainChanged', handleChainChanged)
-      }
-    }
-  }, [handleAccountsChanged, handleChainChanged, isManuallyDisconnected])
-
-  const checkConnection = async () => {
+  // Check connection function
+  const checkConnection = useCallback(async () => {
     try {
       // Don't auto-connect if user manually disconnected
       if (isManuallyDisconnected) {
@@ -180,10 +182,141 @@ export const useWallet = () => {
     } catch (err) {
       console.error('Error checking connection:', err)
     }
-  }
+  }, [isManuallyDisconnected, updateChainId, updateBalance])
+
+  // Initialize provider and set up event listeners
+  useEffect(() => {
+    if (typeof window.ethereum === 'undefined') {
+      return
+    }
+
+    setIsMetaMask(true)
+
+    // Set up event listeners - use arrow functions to ensure they're always current
+    const accountsChangedHandler = (accounts) => {
+      handleAccountsChanged(accounts)
+    }
+
+    const chainChangedHandler = (chainIdHex) => {
+      handleChainChanged(chainIdHex)
+    }
+
+    // Remove any existing listeners first to avoid duplicates
+    window.ethereum.removeAllListeners('accountsChanged')
+    window.ethereum.removeAllListeners('chainChanged')
+
+    // Add new listeners
+    window.ethereum.on('accountsChanged', accountsChangedHandler)
+    window.ethereum.on('chainChanged', chainChangedHandler)
+
+    return () => {
+      if (window.ethereum) {
+        window.ethereum.removeListener('accountsChanged', accountsChangedHandler)
+        window.ethereum.removeListener('chainChanged', chainChangedHandler)
+      }
+    }
+  }, [handleAccountsChanged, handleChainChanged])
+
+  // Check connection on mount (only once)
+  useEffect(() => {
+    let mounted = true
+    
+    const initConnection = async () => {
+      if (typeof window.ethereum === 'undefined') return
+      if (isManuallyDisconnected) return
+      if (account) return
+      
+      try {
+        const accounts = await window.ethereum.request({ method: 'eth_accounts' })
+        if (accounts.length > 0 && mounted) {
+          const accountAddress = accounts[0]
+          setAccount(accountAddress)
+          accountRef.current = accountAddress
+          
+          const provider = new ethers.BrowserProvider(window.ethereum)
+          setProvider(provider)
+          providerRef.current = provider
+          
+          const signer = await provider.getSigner()
+          setSigner(signer)
+          
+          // Update chain ID
+          try {
+            const chainId = await window.ethereum.request({ method: 'eth_chainId' })
+            if (mounted) {
+              setChainId(parseInt(chainId, 16))
+            }
+          } catch (err) {
+            console.error('Error updating chain ID:', err)
+          }
+          
+          // Update balance
+          try {
+            if (mounted && provider) {
+              const balance = await provider.getBalance(accountAddress)
+              if (mounted) {
+                setBalance(ethers.formatEther(balance))
+              }
+            }
+          } catch (err) {
+            console.error('Error updating balance:', err)
+          }
+        }
+      } catch (err) {
+        console.error('Error checking connection:', err)
+      }
+    }
+    
+    initConnection()
+    
+    return () => {
+      mounted = false
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []) // Only run on mount - intentionally empty
+
+  // Switch chain
+  const switchChain = useCallback(async (chainId) => {
+    try {
+      await window.ethereum.request({
+        method: 'wallet_switchEthereumChain',
+        params: [{ chainId: `0x${chainId.toString(16)}` }],
+      })
+      await updateChainId()
+    } catch (switchError) {
+      // This error code indicates that the chain has not been added to MetaMask
+      if (switchError.code === 4902) {
+        throw new Error('Please add this network to MetaMask first')
+      }
+      throw switchError
+    }
+  }, [updateChainId])
 
   // Connect to MetaMask
   const connectMetaMask = useCallback(async () => {
+    // Clear any existing connection first
+    if (account) {
+      // Disconnect existing connection
+      setIsManuallyDisconnected(true)
+      setAccount(null)
+      setChainId(null)
+      setBalance(null)
+      setProvider(null)
+      setSigner(null)
+      setError(null)
+      accountRef.current = null
+      providerRef.current = null
+      
+      // Remove event listeners
+      if (window.ethereum) {
+        window.ethereum.removeAllListeners('accountsChanged')
+        window.ethereum.removeAllListeners('chainChanged')
+      }
+      
+      // Small delay to ensure cleanup
+      await new Promise(resolve => setTimeout(resolve, 100))
+    }
+
     setIsConnecting(true)
     setError(null)
     setIsManuallyDisconnected(false) // Reset manual disconnect flag
@@ -193,12 +326,28 @@ export const useWallet = () => {
         throw new Error('MetaMask is not installed. Please install MetaMask to continue.')
       }
 
-      const accounts = await window.ethereum.request({
-        method: 'eth_requestAccounts',
-      })
+      // Request accounts - this will prompt unlock if MetaMask is locked
+      let accounts
+      try {
+        accounts = await window.ethereum.request({
+          method: 'eth_requestAccounts',
+        })
+      } catch (requestError) {
+        // Check for MetaMask locked error
+        if (
+          requestError.code === 4001 || // User rejected
+          requestError.message?.toLowerCase().includes('locked') ||
+          requestError.message?.toLowerCase().includes('please unlock') ||
+          requestError.message?.toLowerCase().includes('unlock')
+        ) {
+          throw new Error('MetaMask is locked. Please unlock MetaMask and try again.')
+        }
+        // Re-throw other errors
+        throw requestError
+      }
 
       if (accounts.length === 0) {
-        throw new Error('No accounts found')
+        throw new Error('No accounts found. Please unlock MetaMask and try again.')
       }
 
       const provider = new ethers.BrowserProvider(window.ethereum)
@@ -220,29 +369,23 @@ export const useWallet = () => {
         await switchChain(DEFAULT_CHAIN.id)
       }
     } catch (err) {
-      setError(err.message || 'Failed to connect to MetaMask')
+      // Handle MetaMask locked error specifically
+      if (
+        err.code === 4001 ||
+        err.message?.toLowerCase().includes('locked') ||
+        err.message?.toLowerCase().includes('please unlock')
+      ) {
+        setError('MetaMask is locked. Please unlock MetaMask and try again.')
+        toast.error('MetaMask is locked. Please unlock MetaMask and try again.')
+      } else {
+        setError(err.message || 'Failed to connect to MetaMask')
+        toast.error(err.message || 'Failed to connect to MetaMask')
+      }
       console.error('Connection error:', err)
     } finally {
       setIsConnecting(false)
     }
-  }, [checkMetaMask])
-
-  // Switch chain
-  const switchChain = async (chainId) => {
-    try {
-      await window.ethereum.request({
-        method: 'wallet_switchEthereumChain',
-        params: [{ chainId: `0x${chainId.toString(16)}` }],
-      })
-      await updateChainId()
-    } catch (switchError) {
-      // This error code indicates that the chain has not been added to MetaMask
-      if (switchError.code === 4902) {
-        throw new Error('Please add this network to MetaMask first')
-      }
-      throw switchError
-    }
-  }
+  }, [checkMetaMask, account, updateChainId, updateBalance, switchChain])
 
   // Send transaction
   const sendTransaction = useCallback(async (to, value, data = null) => {
